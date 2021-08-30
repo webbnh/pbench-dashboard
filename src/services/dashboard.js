@@ -1,29 +1,35 @@
 /* eslint-disable no-param-reassign */
 /* eslint-disable no-unused-vars */
 /* eslint-disable no-underscore-dangle */
-import request from '../utils/request';
+import { notification } from 'antd';
+import request, { codeMessage } from '../utils/request';
 import { getAllMonthsWithinRange } from '../utils/moment_constants';
 
-function parseMonths(datastoreConfig, index, selectedIndices) {
-  let indices = '';
-
-  selectedIndices.forEach(value => {
-    if (index === datastoreConfig.result_index) {
-      indices += `${datastoreConfig.prefix + index + value}-*,`;
-    } else {
-      indices += `${datastoreConfig.prefix + index + value},`;
-    }
-  });
-
-  return indices;
-}
-
-function scrollUntilEmpty(datastoreConfig, data) {
+async function scrollUntilEmpty(datastoreConfig, data) {
   const endpoint = `${datastoreConfig.elasticsearch}/_search/scroll?scroll=1m`;
   const allData = data;
-
   if (allData.hits.total !== allData.hits.hits.length) {
-    const scroll = request.post(`${endpoint}&scroll_id=${allData._scroll_id}`);
+    const scroll = Promise.resolve(
+      request.post(`${endpoint}&scroll_id=${allData._scroll_id}`, {
+        errorHandler: error => {
+          // override default errorhandler
+          // at @/utils/request.js.
+          // does not break the page on a 502 response,
+          // but throws the error with a notification
+          // so that the dashboard can function normally.
+          const { response = {} } = error;
+          const errortext = codeMessage[response.status] || response.statusText;
+          const { status } = response;
+
+          notification.error({
+            message: `Request Error ${status}`,
+            description: errortext,
+          });
+
+          throw error;
+        },
+      })
+    );
     scroll.then(response => {
       allData._scroll_id = response._scroll_id;
       allData.hits.total = response.hits.total;
@@ -31,6 +37,7 @@ function scrollUntilEmpty(datastoreConfig, data) {
       return scrollUntilEmpty(datastoreConfig, allData);
     });
   }
+
   return allData;
 }
 
@@ -270,7 +277,7 @@ export async function queryIterationSamples(params) {
 export async function queryTimeseriesData(payload) {
   const { datastoreConfig, selectedDateRange, selectedIterations } = payload;
 
-  const endpoint = `${datastoreConfig.elasticsearch}/${parseMonths(
+  const endpoint = `${datastoreConfig.elasticsearch}/${getAllMonthsWithinRange(
     datastoreConfig,
     datastoreConfig.result_index,
     selectedDateRange
